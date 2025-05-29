@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>互動式支持向量機 (SVM) 解說</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .active-btn {
+            outline: 2px solid #2563eb; /* Tailwind blue-600 */
+            outline-offset: 2px;
+        }
+        canvas {
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+        <header class="mb-6 text-center">
+            <h1 class="text-3xl font-bold text-gray-800">支持向量機 (SVM) 直觀理解</h1>
+            <p class="text-md text-gray-600 mt-1">互動式探索 SVM 如何找到最大邊界超平面</p>
+        </header>
+
+        <div class="flex flex-col lg:flex-row gap-6">
+            <div class="lg:w-2/3 bg-white p-4 rounded-xl shadow-lg">
+                <canvas id="svmCanvas" class="border border-gray-300 rounded-lg w-full aspect-[3/2]"></canvas>
+                <div id="statusMessage" class="mt-3 text-sm text-gray-600 min-h-[20px]">請先選擇類別，然後點擊上方畫布以添加數據點。</div>
+            </div>
+
+            <div class="lg:w-1/3 bg-white p-6 rounded-xl shadow-lg flex flex-col gap-4">
+                <div>
+                    <h2 class="text-xl font-semibold text-gray-700 mb-3">控制面板</h2>
+                    <div class="grid grid-cols-2 gap-3 mb-4">
+                        <button id="addClass0Btn" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2.5 px-4 rounded-lg transition-colors duration-150 active-btn">
+                            添加類別 0 (藍)
+                        </button>
+                        <button id="addClass1Btn" class="w-full bg-red-500 hover:bg-red-600 text-white font-medium py-2.5 px-4 rounded-lg transition-colors duration-150">
+                            添加類別 1 (紅)
+                        </button>
+                    </div>
+                    <button id="calculateSvmBtn" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-150 mb-3">
+                        計算 SVM
+                    </button>
+                    <button id="clearBtn" class="w-full bg-gray-500 hover:bg-gray-600 text-white font-bold py-3 px-4 rounded-lg transition-colors duration-150">
+                        清除畫布
+                    </button>
+                </div>
+                
+                <div class="mt-2">
+                    <h3 class="text-lg font-semibold text-gray-700 mb-2">基本概念</h3>
+                    <p class="text-sm text-gray-600 leading-relaxed">
+                        <strong>支持向量機 (SVM)</strong> 是一種監督式學習模型，用於數據分類。
+                        它的核心目標是找到一個「超平面」（在二維空間中是一條直線），該超平面能夠以最大的「邊界 (margin)」將不同類別的數據點分隔開。
+                    </p>
+                    <ul class="list-disc list-inside text-sm text-gray-600 mt-2 space-y-1">
+                        <li><strong>超平面 (Hyperplane):</strong> 分隔數據點的決策邊界。在二維中是一條線，三維中是一個平面。</li>
+                        <li><strong>邊界 (Margin):</strong> 超平面到最近的任一類別數據點之間的距離。SVM 試圖最大化這個距離。</li>
+                        <li><strong>支持向量 (Support Vectors):</strong> 那些最靠近超平面的數據點。它們「支撐」著超平面的位置。如果移動支持向量，超平面也會跟著改變。</li>
+                    </ul>
+                    <div id="marginInfo" class="mt-3 text-sm text-indigo-700 font-semibold min-h-[20px]"></div>
+                </div>
+            </div>
+        </div>
+        <footer class="text-center mt-8 text-sm text-gray-500">
+            <p>嘗試添加一些點，然後點擊 "計算 SVM" 來觀察結果！</p>
+        </footer>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('svmCanvas');
+        const ctx = canvas.getContext('2d');
+        const addClass0Btn = document.getElementById('addClass0Btn');
+        const addClass1Btn = document.getElementById('addClass1Btn');
+        const calculateSvmBtn = document.getElementById('calculateSvmBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const statusMessage = document.getElementById('statusMessage');
+        const marginInfo = document.getElementById('marginInfo');
+
+        let points = [];
+        let currentClass = 0; // 0 for blue, 1 for red
+        let svmResults = null;
+        const POINT_RADIUS = 5;
+        const SV_POINT_RADIUS = 7;
+        const EPSILON = 1e-5; // Epsilon for floating point comparisons
+
+        // Canvas setup for responsiveness
+        function resizeCanvas() {
+            const parentWidth = canvas.parentElement.clientWidth;
+            canvas.width = parentWidth;
+            // Maintain aspect ratio, e.g., 3:2
+            canvas.height = parentWidth * (2 / 3); 
+            drawAll();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        
+
+        // Event Listeners
+        addClass0Btn.addEventListener('click', () => selectClass(0));
+        addClass1Btn.addEventListener('click', () => selectClass(1));
+        calculateSvmBtn.addEventListener('click', calculateAndDrawSVM);
+        clearBtn.addEventListener('click', clearAll);
+        canvas.addEventListener('click', addPoint);
+
+        function selectClass(classNum) {
+            currentClass = classNum;
+            statusMessage.textContent = `已選擇類別 ${classNum}。點擊畫布添加點。`;
+            addClass0Btn.classList.toggle('active-btn', classNum === 0);
+            addClass1Btn.classList.toggle('active-btn', classNum === 1);
+        }
+
+        function addPoint(event) {
+            const rect = canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+            points.push({ x, y, class: currentClass });
+            svmResults = null; // Clear previous SVM results when new point is added
+            marginInfo.textContent = '';
+            drawAll();
+        }
+
+        function drawAll() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawPoints();
+            if (svmResults) {
+                drawSvmComponents();
+            }
+        }
+
+        function drawPoints() {
+            points.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, POINT_RADIUS, 0, 2 * Math.PI);
+                ctx.fillStyle = p.class === 0 ? 'rgba(59, 130, 246, 0.8)' : 'rgba(239, 68, 68, 0.8)'; // blue-500, red-500 with opacity
+                ctx.fill();
+                ctx.strokeStyle = p.class === 0 ? 'rgba(37, 99, 235, 1)' : 'rgba(220, 38, 38, 1)'; // darker border
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            });
+
+            if (svmResults && svmResults.sv) {
+                svmResults.sv.forEach(sv => {
+                    ctx.beginPath();
+                    ctx.arc(sv.x, sv.y, SV_POINT_RADIUS, 0, 2 * Math.PI);
+                    ctx.strokeStyle = 'rgba(250, 204, 21, 1)'; // yellow-400
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                });
+            }
+        }
+        
+        function drawLineOnCanvas(A, B, C_val, color, lineWidth, isDashed = false) {
+            ctx.beginPath();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = lineWidth;
+            if (isDashed) {
+                ctx.setLineDash([5, 5]);
+            } else {
+                ctx.setLineDash([]);
+            }
+
+            // Ax + By + C = 0
+            if (Math.abs(B) > EPSILON) { // Line is not vertical
+                const y1 = (-C_val - A * 0) / B;
+                const y2 = (-C_val - A * canvas.width) / B;
+                ctx.moveTo(0, y1);
+                ctx.lineTo(canvas.width, y2);
+            } else if (Math.abs(A) > EPSILON) { // Line is vertical
+                const x1 = -C_val / A;
+                ctx.moveTo(x1, 0);
+                ctx.lineTo(x1, canvas.height);
+            }
+            ctx.stroke();
+            ctx.setLineDash([]); // Reset dash
+        }
+
+
+        function drawSvmComponents() {
+            if (!svmResults) return;
+
+            const { w, b_hyperplane, b_margin_sv1, b_margin_sv2 } = svmResults;
+            
+            // Draw hyperplane: w.x*x + w.y*y + b_hyperplane = 0
+            drawLineOnCanvas(w.x, w.y, b_hyperplane, 'rgba(34, 197, 94, 1)', 2); // green-500
+
+            // Draw margin line 1 (through sv1): w.x*x + w.y*y + b_margin_sv1 = 0
+            drawLineOnCanvas(w.x, w.y, b_margin_sv1, 'rgba(74, 222, 128, 0.7)', 1.5, true); // green-400 dashed
+
+            // Draw margin line 2 (through sv2): w.x*x + w.y*y + b_margin_sv2 = 0
+            drawLineOnCanvas(w.x, w.y, b_margin_sv2, 'rgba(74, 222, 128, 0.7)', 1.5, true); // green-400 dashed
+        }
+
+        function calculateAndDrawSVM() {
+            const class0Points = points.filter(p => p.class === 0);
+            const class1Points = points.filter(p => p.class === 1);
+
+            if (class0Points.length === 0 || class1Points.length === 0) {
+                statusMessage.textContent = '請至少在每個類別中添加一個點。';
+                svmResults = null;
+                marginInfo.textContent = '';
+                drawAll();
+                return;
+            }
+
+            let max_margin_dist = -1;
+            let best_sv1 = null;
+            let best_sv2 = null;
+            let best_w = null;
+
+            for (const p1 of class0Points) {
+                for (const p2 of class1Points) {
+                    const sv1_cand = p1;
+                    const sv2_cand = p2;
+
+                    // Vector w_cand points from sv1_cand (class 0) to sv2_cand (class 1)
+                    const w_cand = { x: sv2_cand.x - sv1_cand.x, y: sv2_cand.y - sv1_cand.y };
+
+                    if (Math.abs(w_cand.x) < EPSILON && Math.abs(w_cand.y) < EPSILON) {
+                        continue; // Points are identical, skip
+                    }
+                    
+                    const current_margin_dist = Math.sqrt(w_cand.x * w_cand.x + w_cand.y * w_cand.y);
+
+                    let is_separable_by_this_pair = true;
+                    // Check if all other points are correctly separated by the "street" defined by sv1_cand and sv2_cand
+                    // The street boundaries are lines through sv1_cand and sv2_cand, perpendicular to w_cand.
+                    // Line through sv1_cand: w_cand.x * x + w_cand.y * y - (w_cand.x * sv1_cand.x + w_cand.y * sv1_cand.y) = 0
+                    // Line through sv2_cand: w_cand.x * x + w_cand.y * y - (w_cand.x * sv2_cand.x + w_cand.y * sv2_cand.y) = 0
+                    
+                    const C1 = -(w_cand.x * sv1_cand.x + w_cand.y * sv1_cand.y); // for line through sv1_cand
+                    const C2 = -(w_cand.x * sv2_cand.x + w_cand.y * sv2_cand.y); // for line through sv2_cand
+
+                    for (const pt_other of points) {
+                        const projection_val = w_cand.x * pt_other.x + w_cand.y * pt_other.y;
+                        
+                        if (pt_other.class === 0) { // Should be on sv1_cand's side or within margin
+                            // projection_val + C1 <= EPSILON
+                            if (projection_val + C1 > EPSILON) { 
+                                is_separable_by_this_pair = false;
+                                break;
+                            }
+                        } else { // pt_other.class === 1, should be on sv2_cand's side or within margin
+                            // projection_val + C2 >= -EPSILON
+                            if (projection_val + C2 < -EPSILON) {
+                                is_separable_by_this_pair = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (is_separable_by_this_pair) {
+                        if (current_margin_dist > max_margin_dist) {
+                            max_margin_dist = current_margin_dist;
+                            best_sv1 = sv1_cand;
+                            best_sv2 = sv2_cand;
+                            best_w = w_cand;
+                        }
+                    }
+                }
+            }
+
+            if (best_sv1) {
+                const M = { x: (best_sv1.x + best_sv2.x) / 2, y: (best_sv1.y + best_sv2.y) / 2 };
+                svmResults = {
+                    sv: [best_sv1, best_sv2],
+                    w: best_w,
+                    b_hyperplane: -(best_w.x * M.x + best_w.y * M.y),
+                    b_margin_sv1: -(best_w.x * best_sv1.x + best_w.y * best_sv1.y),
+                    b_margin_sv2: -(best_w.x * best_sv2.x + best_w.y * best_sv2.y),
+                    margin_width: max_margin_dist
+                };
+                statusMessage.textContent = 'SVM 計算完成！綠線是超平面，虛線是邊界。';
+                marginInfo.textContent = `最大邊界寬度: ${max_margin_dist.toFixed(2)} 單位`;
+            } else {
+                svmResults = null;
+                statusMessage.textContent = '找不到可分離的超平面 (使用此簡化算法)。請嘗試調整點的位置。';
+                marginInfo.textContent = '';
+            }
+            drawAll();
+        }
+
+        function clearAll() {
+            points = [];
+            svmResults = null;
+            statusMessage.textContent = '畫布已清除。請重新添加數據點。';
+            marginInfo.textContent = '';
+            drawAll();
+        }
+        
+        // Initial setup
+        selectClass(0); // Default to class 0
+        resizeCanvas(); // Initial canvas sizing
+
+    </script>
+</body>
+</html>
